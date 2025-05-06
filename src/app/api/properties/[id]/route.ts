@@ -98,9 +98,9 @@ const PROPERTIES = [
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: Promise<{ params: { id: string } }>
 ) {
-  const id = params.id
+  const id = (await context).params.id
 
   // Find the property with matching ID
   const property = PROPERTIES.find((prop) => prop.id === id)
