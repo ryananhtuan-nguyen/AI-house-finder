@@ -49,7 +49,7 @@ export async function GET(request: Request) {
     const page = await context.newPage()
 
     // Store API responses
-    const apiResponses = []
+    const apiResponses: any[] = []
 
     // IMPROVED: Use a more specific route pattern to catch property data APIs
     await page.route('**/*', async (route) => {
@@ -124,7 +124,7 @@ export async function GET(request: Request) {
     fs.writeFileSync('trademe-debug.html', content)
 
     // Define our property array
-    let properties = []
+    let properties: any[] = []
 
     // IMPROVED: Check if we've captured API responses with property data
     if (apiResponses.length > 0) {
@@ -157,7 +157,7 @@ export async function GET(request: Request) {
           (propertyResponse.body.data && propertyResponse.body.data.list) ||
           []
 
-        properties = listings.map((item, index) => {
+        properties = (listings as any[]).map((item, index) => {
           // Handle various property data structures and field names
           return {
             id: `trademe-${index}`,
@@ -249,7 +249,7 @@ export async function GET(request: Request) {
               ]
 
               // Helper function to try multiple selectors
-              const getTextFromSelectors = (selectors) => {
+              const getTextFromSelectors = (selectors: any) => {
                 for (const sel of selectors) {
                   const el = card.querySelector(sel)
                   if (el && el.textContent) {
@@ -370,7 +370,7 @@ export async function GET(request: Request) {
         bathrooms,
       },
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error scraping TradeMe:', error)
 
     // Make sure we close the browser on error
