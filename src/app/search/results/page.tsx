@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
@@ -20,7 +20,7 @@ interface Property {
   externalUrl?: string
 }
 
-export default function ResultsPage() {
+function SearchResults() {
   const searchParams = useSearchParams()
 
   // Get all search parameters
@@ -209,5 +209,26 @@ export default function ResultsPage() {
         )}
       </main>
     </div>
+  )
+}
+
+// Create a wrapper component that uses Suspense
+export default function ResultsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-b from-white to-gray-50 dark:from-gray-900 dark:to-gray-800 p-8">
+          <main className="max-w-6xl mx-auto">
+            <div className="flex justify-center items-center h-64">
+              <div className="text-xl text-gray-600 dark:text-gray-300">
+                Loading results...
+              </div>
+            </div>
+          </main>
+        </div>
+      }
+    >
+      <SearchResults />
+    </Suspense>
   )
 }
