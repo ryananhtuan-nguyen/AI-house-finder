@@ -144,6 +144,32 @@ export async function GET(request: NextRequest) {
     )
   }
 
+  try {
+    // Call our TradeMe scraper API to get external properties
+    const scrapeUrl = new URL('/api/scrape/trademe', request.nextUrl.origin)
+
+    // Add search params to the scraper request
+    if (location) scrapeUrl.searchParams.append('location', location)
+    if (minPrice) scrapeUrl.searchParams.append('minPrice', minPrice)
+    if (maxPrice) scrapeUrl.searchParams.append('maxPrice', maxPrice)
+    if (bedrooms) scrapeUrl.searchParams.append('bedrooms', bedrooms)
+    if (bathrooms) scrapeUrl.searchParams.append('bathrooms', bathrooms)
+
+    // Fetch external properties
+    const externalPropsResponse = await fetch(scrapeUrl.toString(), {
+      next: { revalidate: 3600 }, // Cache for 1 hour
+    })
+
+    if (externalPropsResponse.ok) {
+      const externalProps = await externalPropsResponse.json()
+
+      // Combine our mock properties with the scraped properties
+      filteredProperties = [...filteredProperties, ...externalProps.properties]
+    }
+  } catch (error) {
+    console.error('Error fetching external properties:', error)
+  }
+
   // Simple AI filtering based on positive and negative preferences
   if (positivePrefs) {
     // Split preferences into keywords

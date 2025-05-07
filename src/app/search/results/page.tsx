@@ -16,6 +16,8 @@ interface Property {
   imageUrl: string
   matchScore: number
   available: string
+  source?: string
+  externalUrl?: string
 }
 
 export default function ResultsPage() {
@@ -161,11 +163,30 @@ export default function ResultsPage() {
                     {property.description}
                   </p>
 
-                  <Link href={`/property/${property.id}`}>
-                    <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors">
-                      View Details
-                    </button>
-                  </Link>
+                  <div className="flex justify-between items-center mt-4">
+                    {property.source && (
+                      <span className="text-xs text-gray-500">
+                        Source: {property.source}
+                      </span>
+                    )}
+
+                    {property.externalUrl ? (
+                      <a
+                        href={property.externalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline text-sm"
+                      >
+                        View on {property.source || 'External Site'}
+                      </a>
+                    ) : (
+                      <Link href={`/property/${property.id}`}>
+                        <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors">
+                          View Details
+                        </button>
+                      </Link>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
