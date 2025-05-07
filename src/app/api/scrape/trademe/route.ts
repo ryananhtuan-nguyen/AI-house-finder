@@ -2,6 +2,69 @@ import { NextResponse } from 'next/server'
 import { chromium } from 'playwright'
 import fs from 'fs'
 
+// Type definitions for TradeMe API and scraper
+interface ApiResponse {
+  url: string
+  status: number
+  body: Record<string, any>
+}
+
+interface TradePropertyListing {
+  Title?: string
+  title?: string
+  name?: string
+  Suburb?: string
+  suburb?: string
+  Location?: string
+  location?: string
+  address?: string
+  PriceDisplay?: string | number
+  price?: string | number
+  Price?: string | number
+  Bedrooms?: number
+  bedrooms?: number
+  Bathrooms?: number
+  bathrooms?: number
+  Description?: string
+  description?: string
+  PictureHref?: string
+  pictureHref?: string
+  ImageUrl?: string
+  imageUrl?: string
+  AvailableFrom?: string
+  availableFrom?: string
+  ListingUrl?: string
+  listingUrl?: string
+  ListingId?: string | number
+  listingId?: string | number
+  [key: string]: unknown // Allow for other properties
+}
+
+interface ScrapedProperty {
+  title: string
+  price: string | number
+  location: string
+  bedrooms: string | number
+  bathrooms: string | number
+  imageUrl: string | null
+  listingUrl: string | null
+}
+
+interface FormattedProperty {
+  id: string
+  title: string
+  location: string
+  price: number
+  bedrooms: number
+  bathrooms: number
+  description: string
+  imageUrl: string
+  matchScore: number
+  available: string
+  externalUrl: string | null
+  source: string
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
 
@@ -49,7 +112,7 @@ export async function GET(request: Request) {
     const page = await context.newPage()
 
     // Store API responses
-    const apiResponses: any[] = []
+    const apiResponses: ApiResponse[] = []
 
     // IMPROVED: Use a more specific route pattern to catch property data APIs
     await page.route('**/*', async (route) => {
@@ -131,7 +194,7 @@ export async function GET(request: Request) {
       console.log(`Found ${apiResponses.length} API responses, processing...`)
 
       // Try to find the most likely API response with listing data
-      const propertyResponse = apiResponses.find((resp) => {
+      const propertyResponse = apiResponses.find((resp: ApiResponse) => {
         // Check for common data structures in the TradeMe API responses
         return (
           resp.body &&
@@ -249,7 +312,7 @@ export async function GET(request: Request) {
               ]
 
               // Helper function to try multiple selectors
-              const getTextFromSelectors = (selectors: any) => {
+              const getTextFromSelectors = (selectors: string[]) => {
                 for (const sel of selectors) {
                   const el = card.querySelector(sel)
                   if (el && el.textContent) {
@@ -370,7 +433,7 @@ export async function GET(request: Request) {
         bathrooms,
       },
     })
-  } catch (error: any) {
+  } catch (error: Error | unknown) {
     console.error('Error scraping TradeMe:', error)
 
     // Make sure we close the browser on error
@@ -379,7 +442,10 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json(
-      { error: 'Failed to scrape TradeMe', message: error.message },
+      {
+        error: 'Failed to scrape TradeMe',
+        message: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     )
   }
