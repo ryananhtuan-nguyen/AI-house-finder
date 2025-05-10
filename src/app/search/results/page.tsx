@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 
 // Define Property interface
@@ -22,6 +22,7 @@ interface Property {
 
 function SearchResults() {
   const searchParams = useSearchParams()
+  const router = useRouter()
 
   // Get all search parameters
   const location = searchParams.get('location')
@@ -36,9 +37,14 @@ function SearchResults() {
   const [properties, setProperties] = useState<Property[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [authRequired, setAuthRequired] = useState(false)
+  const [authUrl, setAuthUrl] = useState('')
+
+  // Check if we're returning from auth
+  const authSuccess = searchParams.get('auth') === 'success'
 
   useEffect(() => {
-    async function fetchProperties() {
+    async function fetchAllProperties() {
       try {
         setLoading(true)
 
@@ -54,7 +60,35 @@ function SearchResults() {
         if (negativePreferences)
           queryParams.append('negativePreferences', negativePreferences)
 
-        // Call our API endpoint
+        // First, try to get TradeMe properties
+        try {
+          const tradeMeResponse = await fetch(
+            `/api/scrape/trademe?${queryParams.toString()}`
+          )
+          const tradeMeData = await tradeMeResponse.json()
+
+          // Check if auth is required
+          if (tradeMeResponse.status === 401 && tradeMeData.authUrl) {
+            setAuthRequired(true)
+            setAuthUrl(tradeMeData.authUrl)
+            console.log('TradeMe authentication required')
+
+            // Still continue to fetch from other sources
+          } else if (tradeMeResponse.ok) {
+            // Successfully got TradeMe data
+            console.log(
+              'Got TradeMe data:',
+              tradeMeData.properties?.length || 0,
+              'properties'
+            )
+            // You can merge tradeMeData.properties with other property sources here
+          }
+        } catch (tradeMeError) {
+          console.error('Error fetching from TradeMe:', tradeMeError)
+          // Continue with other sources
+        }
+
+        // Always fetch from your main API that aggregates all sources
         const response = await fetch(
           `/api/properties?${queryParams.toString()}`
         )
@@ -75,7 +109,7 @@ function SearchResults() {
       }
     }
 
-    fetchProperties()
+    fetchAllProperties()
   }, [
     location,
     minPrice,
@@ -84,6 +118,7 @@ function SearchResults() {
     bathrooms,
     positivePreferences,
     negativePreferences,
+    authSuccess,
   ])
 
   return (
@@ -190,6 +225,34 @@ function SearchResults() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {authRequired && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-xl max-w-md w-full">
+              <h3 className="text-xl font-bold mb-4">
+                TradeMe Authentication Required
+              </h3>
+              <p className="mb-6 text-gray-600 dark:text-gray-300">
+                To see the most comprehensive rental listings from TradeMe, you
+                need to authenticate with your TradeMe account.
+              </p>
+              <div className="flex justify-between">
+                <button
+                  onClick={() => setAuthRequired(false)}
+                  className="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 px-4 py-2 rounded"
+                >
+                  Skip for now
+                </button>
+                <button
+                  onClick={() => router.push(authUrl)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded"
+                >
+                  Connect with TradeMe
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

@@ -225,5 +225,11 @@ export async function GET(request: NextRequest) {
   // Add artificial delay to simulate real API
   await new Promise((resolve) => setTimeout(resolve, 800))
 
-  return NextResponse.json({ properties: filteredProperties })
+  return NextResponse.json({
+    properties: filteredProperties,
+    count: filteredProperties.length,
+    sources: ['OneRoof', 'HomeNZ'], // List of sources that were successfully fetched
+    missingSources: [], // Sources that need authentication
+    authUrls: {},
+  })
 }

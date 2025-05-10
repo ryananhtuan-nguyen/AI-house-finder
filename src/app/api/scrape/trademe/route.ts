@@ -1,430 +1,192 @@
 import { NextResponse } from 'next/server'
-import { chromium } from 'playwright'
-import fs from 'fs'
+import OAuth from 'oauth-1.0a'
+import crypto from 'crypto'
+import { cookies } from 'next/headers'
 
-// Type definitions for TradeMe API and scraper
-interface ApiResponse {
-  url: string
-  status: number
-  body: Record<string, any>
-}
-
+// Define better types
 interface TradePropertyListing {
-  Title?: string
-  title?: string
-  name?: string
-  Suburb?: string
-  suburb?: string
-  Location?: string
-  location?: string
-  address?: string
-  PriceDisplay?: string | number
-  price?: string | number
-  Price?: string | number
-  Bedrooms?: number
-  bedrooms?: number
-  Bathrooms?: number
-  bathrooms?: number
-  Description?: string
-  description?: string
-  PictureHref?: string
-  pictureHref?: string
-  ImageUrl?: string
-  imageUrl?: string
-  AvailableFrom?: string
-  availableFrom?: string
-  ListingUrl?: string
-  listingUrl?: string
   ListingId?: string | number
-  listingId?: string | number
-  [key: string]: unknown // Allow for other properties
+  Title?: string
+  Suburb?: string
+  City?: string
+  PriceDisplay?: string | number
+  Bedrooms?: number
+  Bathrooms?: number
+  Body?: string
+  PictureHref?: string
+  AvailableFrom?: string
+  [key: string]: any
 }
 
-interface ScrapedProperty {
-  title: string
-  price: string | number
-  location: string
-  bedrooms: string | number
-  bathrooms: string | number
-  imageUrl: string | null
-  listingUrl: string | null
+// Helper function to map location names to TradeMe region IDs
+function mapLocationToTradeMe(location: string): string {
+  // Location mapping based on TradeMe's region IDs
+  const locationMap: Record<string, string> = {
+    auckland: '1', // Auckland region
+    wellington: '15', // Wellington region
+    christchurch: '14', // Canterbury region
+    hamilton: '2', // Waikato region
+    tauranga: '2', // Bay of Plenty region
+    dunedin: '12', // Otago region
+    'palmerston north': '8', // Manawatu/Wanganui
+    nelson: '16', // Nelson/Marlborough
+    rotorua: '2', // Bay of Plenty
+    'new plymouth': '10', // Taranaki
+    napier: '6', // Hawke's Bay
+    invercargill: '17', // Southland
+    whangarei: '3', // Northland
+    // Add more as needed
+  }
+
+  return locationMap[location.toLowerCase()] || '0' // Default to all of NZ (0)
 }
 
-interface FormattedProperty {
-  id: string
-  title: string
-  location: string
-  price: number
-  bedrooms: number
-  bathrooms: number
-  description: string
-  imageUrl: string
-  matchScore: number
-  available: string
-  externalUrl: string | null
-  source: string
+// Helper function to extract price from price display string
+function extractPrice(priceStr: string | number): number {
+  if (typeof priceStr === 'number') return priceStr
+  if (!priceStr) return 0
+
+  // Extract numeric value from price string (e.g., "$450 per week" → 450)
+  const priceMatch = priceStr.toString().match(/\$?([\d,]+)/)
+  if (priceMatch) {
+    return parseInt(priceMatch[1].replace(/,/g, ''))
+  }
+  return 0
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
 
-  // Get search parameters from request
+  // Get search parameters
   const location = searchParams.get('location') || 'auckland'
   const minPrice = searchParams.get('minPrice')
   const maxPrice = searchParams.get('maxPrice')
   const bedrooms = searchParams.get('bedrooms')
   const bathrooms = searchParams.get('bathrooms')
 
-  let browser
-
   try {
-    // Build TradeMe URL based on search parameters
-    let url = `https://www.trademe.co.nz/a/property/residential/rent/${location}/search?`
+    // Get the stored access tokens - FIX: await cookies()
+    const cookieStore = await cookies()
+    const accessToken = cookieStore.get('trademe_access_token')?.value
+    const accessTokenSecret = cookieStore.get(
+      'trademe_access_token_secret'
+    )?.value
 
-    const queryParams = new URLSearchParams()
-    if (minPrice) queryParams.append('price_min', minPrice)
-    if (maxPrice) queryParams.append('price_max', maxPrice)
-    if (bedrooms) queryParams.append('bedrooms_min', bedrooms)
-    if (bathrooms) queryParams.append('bathrooms_min', bathrooms)
-
-    // Add common filters
-    queryParams.append('property_type', 'apartment')
-    queryParams.append('property_type', 'house')
-    queryParams.append('property_type', 'townhouse')
-
-    url += queryParams.toString()
-
-    console.log(`Scraping URL: ${url}`)
-
-    // Launch browser with playwright
-    browser = await chromium.launch({
-      headless: true,
-    })
-
-    // Create context WITH JavaScript enabled
-    const context = await browser.newContext({
-      viewport: { width: 1280, height: 800 },
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      javaScriptEnabled: true, // JavaScript must be enabled for TradeMe
-    })
-
-    const page = await context.newPage()
-
-    // Store API responses
-    const apiResponses: ApiResponse[] = []
-
-    // IMPROVED: Use a more specific route pattern to catch property data APIs
-    await page.route('**/*', async (route) => {
-      const url = route.request().url()
-      const method = route.request().method()
-
-      // Target the search result endpoints specifically
-      if (
-        url.includes('/api/v1/search/property/rental') ||
-        url.includes('rsqid') ||
-        url.includes('search-results')
-      ) {
-        console.log('Intercepted potential property API call:', url)
-
-        try {
-          const response = await route.fetch()
-          const contentType = response.headers()['content-type'] || ''
-
-          // Only process JSON responses
-          if (contentType.includes('application/json')) {
-            const jsonData = await response.json()
-            console.log('Found property data API response')
-            apiResponses.push({
-              url,
-              status: response.status(),
-              body: jsonData,
-            })
-          }
-
-          await route.fulfill({ response })
-        } catch (error) {
-          console.error('Error intercepting API call:', error)
-          await route.continue()
-        }
-      } else {
-        await route.continue()
-      }
-    })
-
-    // First use a more reliable waitUntil option
-    await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000, // 60-second timeout
-    })
-
-    console.log('Page loaded, waiting for content to render...')
-
-    // Try different wait strategies to ensure page content loads
-    try {
-      // Wait for a reasonable amount of time for SPA content to render
-      await page.waitForTimeout(50000)
-
-      // Wait for search results to appear
-      await Promise.race([
-        page.waitForSelector('.tm-property-search-card', { timeout: 100000 }),
-        page.waitForSelector('tm-search-card', { timeout: 100000 }),
-        page.waitForSelector('.o-card', { timeout: 100000 }),
-      ])
-
-      console.log('Search results found on page')
-    } catch (error) {
-      console.warn(
-        'Timed out waiting for search results to appear, continuing anyway'
+    // If we don't have tokens, redirect to the auth flow
+    if (!accessToken || !accessTokenSecret) {
+      // Create a redirect to the auth endpoint
+      const authUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/trademe`
+      return NextResponse.json(
+        {
+          error: 'Authentication required',
+          authUrl,
+        },
+        { status: 401 }
       )
     }
 
-    // Take screenshot for debugging
-    await page.screenshot({ path: 'trademe-page.png' })
+    // Rest of your code remains the same...
+    // Set up OAuth with the stored tokens
+    const oauth = new OAuth({
+      consumer: {
+        key: process.env.TRADEME_API_KEY!,
+        secret: process.env.TRADEME_SECRET_KEY!,
+      },
+      signature_method: 'HMAC-SHA1',
+      hash_function(base_string, key) {
+        return crypto
+          .createHmac('sha1', key)
+          .update(base_string)
+          .digest('base64')
+      },
+    })
 
-    // Save HTML for debugging
-    const content = await page.content()
-    fs.writeFileSync('trademe-debug.html', content)
+    // Build API URL with parameters
+    const apiUrl = new URL(
+      'https://api.tmsandbox.co.nz/v1/Search/Property/Rental.json'
+    )
 
-    // Define our property array
-    let properties: any[] = []
+    // Add search parameters
+    if (location) {
+      const locationId = mapLocationToTradeMe(location)
+      apiUrl.searchParams.append('region', locationId)
+    }
+    if (minPrice) apiUrl.searchParams.append('price_min', minPrice)
+    if (maxPrice) apiUrl.searchParams.append('price_max', maxPrice)
+    if (bedrooms) apiUrl.searchParams.append('bedrooms_min', bedrooms)
+    if (bathrooms) apiUrl.searchParams.append('bathrooms_min', bathrooms)
 
-    // IMPROVED: Check if we've captured API responses with property data
-    if (apiResponses.length > 0) {
-      console.log(`Found ${apiResponses.length} API responses, processing...`)
-
-      // Try to find the most likely API response with listing data
-      const propertyResponse = apiResponses.find((resp: ApiResponse) => {
-        // Check for common data structures in the TradeMe API responses
-        return (
-          resp.body &&
-          (resp.body.List ||
-            resp.body.list ||
-            resp.body.props ||
-            resp.body.properties ||
-            resp.body.results ||
-            (resp.body.data && resp.body.data.list))
-        )
-      })
-
-      if (propertyResponse) {
-        console.log('Found property listing data in API response')
-
-        // Extract the actual listing array, handling different response structures
-        const listings =
-          propertyResponse.body.List ||
-          propertyResponse.body.list ||
-          propertyResponse.body.props ||
-          propertyResponse.body.properties ||
-          propertyResponse.body.results ||
-          (propertyResponse.body.data && propertyResponse.body.data.list) ||
-          []
-
-        properties = (listings as any[]).map((item, index) => {
-          // Handle various property data structures and field names
-          return {
-            id: `trademe-${index}`,
-            title: item.Title || item.title || item.name || 'No Title',
-            location:
-              item.Suburb ||
-              item.suburb ||
-              item.Location ||
-              item.location ||
-              item.address ||
-              'Unknown Location',
-            price: item.PriceDisplay || item.price || item.Price || 0,
-            bedrooms: item.Bedrooms || item.bedrooms || 0,
-            bathrooms: item.Bathrooms || item.bathrooms || 0,
-            description:
-              item.Description ||
-              item.description ||
-              `${item.Title || item.title || 'Property'} in ${
-                item.Location || item.location || 'Unknown Location'
-              }`,
-            imageUrl:
-              item.PictureHref ||
-              item.pictureHref ||
-              item.ImageUrl ||
-              item.imageUrl ||
-              'https://via.placeholder.com/300x200?text=No+Image',
-            matchScore: 85, // Default match score
-            available: item.AvailableFrom || item.availableFrom || 'Now',
-            externalUrl:
-              item.ListingUrl ||
-              item.listingUrl ||
-              `https://www.trademe.co.nz/a/property/residential/rent/${location}/${
-                item.ListingId || item.listingId || ''
-              }`,
-            source: 'TradeMe',
-          }
-        })
-      }
+    // Prepare OAuth request
+    const requestData = {
+      url: apiUrl.toString(),
+      method: 'GET',
     }
 
-    // If API responses didn't work, try DOM scraping as fallback
-    if (properties.length === 0) {
-      console.log(
-        'No properties found in API responses, falling back to DOM scraping'
+    // Generate headers using our access tokens - Use PLAINTEXT method
+    const timestamp = Math.floor(Date.now() / 1000).toString()
+    const nonce = crypto.randomBytes(16).toString('hex')
+    const consumerKey = process.env.TRADEME_API_KEY!
+    const consumerSecret = process.env.TRADEME_SECRET_KEY!
+
+    // For PLAINTEXT method, the signature is consumer_secret&token_secret
+    const signature = `${encodeURIComponent(
+      consumerSecret
+    )}&${encodeURIComponent(accessTokenSecret)}`
+
+    // Create Authorization header
+    const authHeader =
+      `OAuth oauth_consumer_key="${encodeURIComponent(consumerKey)}", ` +
+      `oauth_nonce="${encodeURIComponent(nonce)}", ` +
+      `oauth_signature="${signature}", ` +
+      `oauth_signature_method="PLAINTEXT", ` +
+      `oauth_timestamp="${timestamp}", ` +
+      `oauth_token="${encodeURIComponent(accessToken)}", ` +
+      `oauth_version="1.0"`
+
+    console.log('Making TradeMe API request with OAuth tokens')
+
+    // Make the request with proper OAuth headers
+    const response = await fetch(apiUrl, {
+      headers: {
+        Authorization: authHeader,
+        Accept: 'application/json',
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(
+        `TradeMe API error: ${response.status} ${response.statusText}`
       )
-
-      // IMPROVED: More specific selectors and robust extraction
-      const cardSelectors = [
-        '.tm-property-search-card',
-        'tm-search-card',
-        '.o-card',
-        '.search-card',
-        '[data-test="search-card"]',
-        'article', // Generic fallback
-      ]
-
-      // Try each selector
-      for (const selector of cardSelectors) {
-        console.log(`Trying selector: ${selector}`)
-        const count = await page.locator(selector).count()
-        console.log(`Found ${count} items with selector ${selector}`)
-
-        if (count > 0) {
-          // We found property cards with this selector
-          properties = await page.$$eval(selector, (cards) => {
-            return cards.map((card) => {
-              // IMPROVED: More specific inner element selectors with multiple fallbacks
-              const titleSelectors = [
-                '.tm-property-search-card__title',
-                '.o-card__heading',
-                '[data-test="listing-card-title"]',
-                'h3',
-                '.title',
-              ]
-
-              const priceSelectors = [
-                '.tm-property-search-card__price',
-                '.o-card__price',
-                '[data-test="listing-card-price"]',
-                '.price',
-              ]
-
-              const locationSelectors = [
-                '.tm-property-search-card__subtitle',
-                '.o-card__secondary-text',
-                '[data-test="listing-card-subtitle"]',
-                '.subtitle',
-                '.location',
-              ]
-
-              // Helper function to try multiple selectors
-              const getTextFromSelectors = (selectors: string[]) => {
-                for (const sel of selectors) {
-                  const el = card.querySelector(sel)
-                  if (el && el.textContent) {
-                    return el.textContent.trim()
-                  }
-                }
-                return null
-              }
-
-              // Extract data using our helper and fallbacks
-              const title = getTextFromSelectors(titleSelectors) || 'No Title'
-              const price = getTextFromSelectors(priceSelectors) || '0'
-              const location =
-                getTextFromSelectors(locationSelectors) || 'Unknown Location'
-
-              // Extract bedrooms and bathrooms
-              let bedrooms = '0'
-              let bathrooms = '0'
-
-              // Try to find structured attribute data
-              const cardText = card.textContent || ''
-              const bedroomMatch = cardText.match(/(\d+)\s*bed/i)
-              const bathroomMatch = cardText.match(/(\d+)\s*bath/i)
-
-              if (bedroomMatch) bedrooms = bedroomMatch[1]
-              if (bathroomMatch) bathrooms = bathroomMatch[1]
-
-              // Extract image URL
-              const imgEl = card.querySelector('img')
-              const imageUrl = imgEl
-                ? imgEl.getAttribute('src') || imgEl.getAttribute('data-src')
-                : null
-
-              // Extract listing URL
-              let listingUrl = null
-              const linkEl = card.closest('a') || card.querySelector('a')
-              if (linkEl) {
-                listingUrl = linkEl.getAttribute('href')
-                if (listingUrl && !listingUrl.startsWith('http')) {
-                  listingUrl = 'https://www.trademe.co.nz' + listingUrl
-                }
-              }
-
-              return {
-                title,
-                price,
-                location,
-                bedrooms,
-                bathrooms,
-                imageUrl,
-                listingUrl,
-              }
-            })
-          })
-
-          // Format the properties
-          properties = properties.map((prop, index) => {
-            // Parse price string to extract numeric value
-            let priceValue = 0
-            if (typeof prop.price === 'string') {
-              const priceMatch = prop.price.match(/\$?([\d,]+)/)
-              if (priceMatch) {
-                priceValue = parseInt(priceMatch[1].replace(/,/g, ''))
-              }
-            } else if (typeof prop.price === 'number') {
-              priceValue = prop.price
-            }
-
-            return {
-              id: `trademe-${index}`,
-              title: prop.title || 'No Title',
-              location: prop.location || 'Unknown Location',
-              price: priceValue,
-              bedrooms:
-                typeof prop.bedrooms === 'string'
-                  ? parseInt(prop.bedrooms) || 0
-                  : prop.bedrooms || 0,
-              bathrooms:
-                typeof prop.bathrooms === 'string'
-                  ? parseInt(prop.bathrooms) || 0
-                  : prop.bathrooms || 0,
-              description: `${prop.title} - ${prop.location}`,
-              imageUrl:
-                prop.imageUrl ||
-                'https://via.placeholder.com/300x200?text=No+Image',
-              matchScore: 85,
-              available: 'Now',
-              externalUrl: prop.listingUrl,
-              source: 'TradeMe',
-            }
-          })
-
-          break
-        }
-      }
     }
 
-    console.log(`Found ${properties.length} properties`)
+    const data = await response.json()
+    console.log('Received response from TradeMe API')
 
-    // Log sample property for debugging
-    if (properties.length > 0) {
-      console.log('Sample property:', JSON.stringify(properties[0], null, 2))
-    }
+    // Process the property data
+    const properties =
+      data.List?.map((item: TradePropertyListing, index: number) => ({
+        id: `trademe-${item.ListingId || index}`,
+        title: item.Title || 'No Title',
+        location:
+          `${item.Suburb || ''}, ${item.City || ''}`.trim() ||
+          'Unknown Location',
+        price: extractPrice(item.PriceDisplay || ''),
+        bedrooms: item.Bedrooms || 0,
+        bathrooms: item.Bathrooms || 0,
+        description: item.Body || item.Title || 'No Description',
+        imageUrl:
+          item.PictureHref ||
+          'https://via.placeholder.com/300x200?text=No+Image',
+        matchScore: 85, // Default match score
+        available: item.AvailableFrom || 'Now',
+        externalUrl: `https://www.tmsandbox.co.nz/a/property/residential/rent/listing/${item.ListingId}`,
+        source: 'TradeMe',
+      })) || []
 
-    // Close the browser
-    await browser.close()
-
-    // Return the scraped data
     return NextResponse.json({
-      properties,
-      count: properties.length,
-      source: 'TradeMe',
+      properties: properties || [],
+      count: properties?.length || 0,
+      source: 'TradeMe API',
       query: {
         location,
         minPrice,
@@ -433,17 +195,12 @@ export async function GET(request: Request) {
         bathrooms,
       },
     })
-  } catch (error: Error | unknown) {
-    console.error('Error scraping TradeMe:', error)
-
-    // Make sure we close the browser on error
-    if (browser) {
-      await browser.close()
-    }
+  } catch (error: unknown) {
+    console.error('Error with TradeMe API:', error)
 
     return NextResponse.json(
       {
-        error: 'Failed to scrape TradeMe',
+        error: 'Failed to fetch from TradeMe API',
         message: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
